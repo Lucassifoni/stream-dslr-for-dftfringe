@@ -1,0 +1,3 @@
+app/target/
+app/src-tauri/gen/
+__pycache__/

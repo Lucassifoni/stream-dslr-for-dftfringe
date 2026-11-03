@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Livestream</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="main.js" defer></script>
+</head>
+<body>
+  <main>
+    <section class="url-row">
+      <label for="url">Stream URL for DFTFringe</label>
+      <div class="url-box">
+        <input id="url" readonly value="http://127.0.0.1:8765/video_feed">
+        <button id="copy" type="button">Copy</button>
+      </div>
+    </section>
+
+    <section class="controls">
+      <div class="segmented" role="radiogroup" aria-label="Capture mode">
+        <button type="button" role="radio" data-mode="liveview" aria-checked="true">Liveview</button>
+        <button type="button" role="radio" data-mode="stills" aria-checked="false">Stills</button>
+      </div>
+
+      <button id="play" type="button" class="play" aria-pressed="false">
+        <span class="icon" aria-hidden="true"></span><span class="label">Play</span>
+      </button>
+    </section>
+
+    <section id="stills-options" class="stills-options" hidden>
+      <label>Every
+        <input id="interval" type="number" min="1" max="20" step="1" value="1"> s
+      </label>
+      <label>Format
+        <select id="format"></select>
+      </label>
+      <p class="warning">Each frame fires the shutter. Use manual focus.</p>
+    </section>
+
+    <section class="status" aria-live="polite">
+      <span id="state" class="badge">paused</span>
+      <span id="details"></span>
+    </section>
+    <p id="error" class="error" hidden></p>
+
+    <section class="preview">
+      <label class="toggle"><input id="show-preview" type="checkbox" checked> Preview</label>
+      <div class="frame">
+        <img id="preview" alt="Camera preview">
+        <p id="preview-empty" class="empty">No frame yet — press Play.</p>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
