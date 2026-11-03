@@ -1,0 +1,88 @@
+name: release
+
+# Push a tag like v0.1.0 to build and publish a GitHub Release with a macOS
+# .dmg (Apple Silicon) and a Linux .AppImage. "Run workflow" (manual dispatch)
+# builds and tests both without publishing anything.
+#
+# Supply-chain policy: the only action is actions/checkout pinned by SHA;
+# Rust comes from rust-toolchain.toml, crates from the audited Cargo.lock
+# (--locked), the Tauri CLI from package-lock.json (npm ci, no scripts).
+# Exception: for AppImage, the Tauri bundler downloads linuxdeploy and its
+# GTK plugin at build time; those are not pinned by this repository.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME"
+          --repo "$GITHUB_REPOSITORY"
+          --draft --title "Livestream $GITHUB_REF_NAME" --generate-notes
+
+  build:
+    needs: release
+    if: ${{ !failure() && !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            bundles: dmg
+            artifact: target/release/bundle/dmg/*.dmg
+          - os: ubuntu-22.04
+            bundles: appimage
+            artifact: target/release/bundle/appimage/*.AppImage
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libsoup-3.0-dev \
+            file patchelf
+
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      - name: Tauri CLI
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Bundle
+        run: npx --no-install tauri build --bundles ${{ matrix.bundles }} -- --locked
+
+      - name: Upload to release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" ${{ matrix.artifact }} --clobber
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false

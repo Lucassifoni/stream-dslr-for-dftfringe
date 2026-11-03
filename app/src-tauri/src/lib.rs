@@ -61,6 +61,7 @@ impl From<&CaptureConfig> for ConfigDto {
 #[serde(rename_all = "camelCase")]
 pub struct StatusDto {
     pub playing: bool,
+    pub install_hint: &'static str,
     pub config: ConfigDto,
     pub state: &'static str,
     pub frames: u64,
@@ -104,6 +105,7 @@ pub fn status_dto(
 ) -> StatusDto {
     StatusDto {
         playing: s.playing,
+        install_hint: source::install_hint(std::env::consts::OS),
         config: ConfigDto::from(&s.config),
         state: state_name(s.state),
         frames: s.frames,
@@ -151,7 +153,7 @@ pub fn run() {
     let supervisor = Supervisor::new(
         hub.clone(),
         Box::new(source::gphoto2_command),
-        Some(Box::new(source::release_macos_ptpcamera)),
+        Some(Box::new(source::release_camera_claimers)),
         SupervisorOptions::default(),
     );
     let state = AppState {

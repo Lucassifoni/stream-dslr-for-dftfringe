@@ -7,7 +7,27 @@ at `http://127.0.0.1:8765/video_feed`, which DFTFringe's Live View opens as a UR
   play/pause, live preview, status. **This is the main tool.**
 - `python-poc/` — original command-line proof of concept, same stream format.
 
-gphoto2 is not bundled: install it with `brew install gphoto2`.
+gphoto2 is not bundled: `brew install gphoto2` (macOS) or `sudo apt install gphoto2` (Linux).
+
+## Download
+
+Grab the latest `.dmg` (macOS, Apple Silicon) or `.AppImage` (Linux x86_64,
+built on Ubuntu 22.04 so it runs on glibc 2.35+ distros) from the GitHub Releases page.
+
+- **macOS**: the app is ad-hoc signed, not notarized. After copying it to
+  Applications, run once: `xattr -dr com.apple.quarantine /Applications/Livestream.app`
+  (or right-click → Open, then confirm in System Settings → Privacy & Security).
+- **Linux**: `chmod +x Livestream_*.AppImage && ./Livestream_*.AppImage`.
+  AppImages need FUSE 2 (`sudo apt install libfuse2`, `libfuse2t64` on Ubuntu 24.04);
+  without it, run with `--appimage-extract-and-run`. The app stops GNOME's gvfs
+  gphoto2 monitor before each start so it can claim the camera.
+
+## Releasing
+
+Bump `version` in `app/src-tauri/tauri.conf.json` (and `app/src-tauri/Cargo.toml`),
+commit, then `git tag v0.1.0 && git push --tags`. The `release` workflow tests,
+builds both bundles and publishes the release. "Run workflow" on the Actions tab
+does a build-only dry run.
 
 ## App
 

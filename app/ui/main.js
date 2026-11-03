@@ -67,7 +67,7 @@ function render(s) {
   $("state").className = `badge ${s.state}`;
   $("details").textContent = describe(s);
   $("preview-empty").hidden = s.frames > 0 || s.width !== null;
-  const gphotoMissing = s.gphoto2 ? null : "gphoto2 not found — install it with `brew install gphoto2`.";
+  const gphotoMissing = s.gphoto2 ? null : `gphoto2 not found — install it with \`${s.installHint}\`.`;
   showError(s.serverError || s.lastError || gphotoMissing);
 }
 

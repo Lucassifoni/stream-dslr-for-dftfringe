@@ -28,10 +28,11 @@ pub const JPEG_FORMATS: [&str; 6] = ["L", "cL", "M", "cM", "S", "cS"];
 pub const MAX_STILLS_INTERVAL: u32 = 20;
 
 /// Locations checked after `PATH`, since macOS GUI apps do not inherit the shell PATH.
-pub const GPHOTO2_FALLBACKS: [&str; 3] = [
+pub const GPHOTO2_FALLBACKS: [&str; 4] = [
     "/opt/homebrew/bin/gphoto2",
     "/usr/local/bin/gphoto2",
     "/opt/local/bin/gphoto2",
+    "/usr/bin/gphoto2",
 ];
 
 const RECENT_FRAMES: usize = 10;
@@ -129,8 +130,9 @@ fn is_executable(path: &Path) -> bool {
 pub fn gphoto2_command(config: &CaptureConfig) -> Result<Command, String> {
     let binary = locate_gphoto2().ok_or_else(|| {
         format!(
-            "gphoto2 not found in PATH or {} — install it with `brew install gphoto2`",
-            GPHOTO2_FALLBACKS.join(", ")
+            "gphoto2 not found in PATH or {} — install it with `{}`",
+            GPHOTO2_FALLBACKS.join(", "),
+            install_hint(env::consts::OS)
         )
     })?;
     let mut command = Command::new(binary);
@@ -138,13 +140,37 @@ pub fn gphoto2_command(config: &CaptureConfig) -> Result<Command, String> {
     Ok(command)
 }
 
-/// Kill macOS's PTPCamera daemon, which claims PTP cameras and blocks libgphoto2.
-pub fn release_macos_ptpcamera() {
-    let _ = Command::new("/usr/bin/killall")
-        .arg("PTPCamera")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+/// Package manager command installing gphoto2 on `os` (as in [`std::env::consts::OS`]).
+pub fn install_hint(os: &str) -> &'static str {
+    match os {
+        "macos" => "brew install gphoto2",
+        "linux" => "sudo apt install gphoto2",
+        _ => "install gphoto2 with your package manager",
+    }
+}
+
+/// Commands killing desktop services that claim PTP cameras and block libgphoto2:
+/// macOS's PTPCamera daemon, GNOME/GVFS's gphoto2 monitor on Linux.
+pub fn camera_claimer_commands(os: &str) -> Vec<Vec<&'static str>> {
+    match os {
+        "macos" => vec![vec!["/usr/bin/killall", "PTPCamera"]],
+        "linux" => vec![
+            vec!["pkill", "-f", "gvfs-gphoto2-volume-monitor"],
+            vec!["pkill", "-f", "gvfsd-gphoto2"],
+        ],
+        _ => vec![],
+    }
+}
+
+/// Run [`camera_claimer_commands`] for the current OS, ignoring failures.
+pub fn release_camera_claimers() {
+    for argv in camera_claimer_commands(env::consts::OS) {
+        let _ = Command::new(argv[0])
+            .args(&argv[1..])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
 }
 
 fn send_signal(pid: u32, signal: &str) {
@@ -180,7 +206,7 @@ pub struct SourceStatus {
 
 /// Builds the producer command for a configuration.
 pub type CommandFactory = Box<dyn Fn(&CaptureConfig) -> Result<Command, String> + Send + Sync>;
-/// Runs before every spawn (e.g. [`release_macos_ptpcamera`]).
+/// Runs before every spawn (e.g. [`release_camera_claimers`]).
 pub type Hook = Box<dyn Fn() + Send + Sync>;
 
 #[derive(Clone, Copy, Debug)]
@@ -585,6 +611,15 @@ mod tests {
         assert_eq!(find_gphoto2(Some(path), &[fallback_str]), Some(not_exec));
         assert_eq!(find_gphoto2(None, &["/nonexistent/gphoto2"]), None);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn per_os_camera_claimers_and_hints() {
+        assert_eq!(camera_claimer_commands("macos"), vec![vec!["/usr/bin/killall", "PTPCamera"]]);
+        assert!(camera_claimer_commands("linux").iter().all(|c| c[0] == "pkill"));
+        assert!(camera_claimer_commands("windows").is_empty());
+        assert_eq!(install_hint("macos"), "brew install gphoto2");
+        assert_eq!(install_hint("linux"), "sudo apt install gphoto2");
     }
 
     #[test]
