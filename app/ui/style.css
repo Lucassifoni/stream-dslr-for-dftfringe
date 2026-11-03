@@ -77,6 +77,8 @@ button:disabled { opacity: .5; cursor: default; }
 .segmented button { border: 0; border-radius: 7px; padding: 6px 16px; background: transparent; }
 .segmented button[aria-checked="true"] { background: var(--text); color: var(--bg); }
 
+.actions { display: flex; gap: 8px; align-items: center; }
+
 .play {
   display: inline-flex;
   align-items: center;
@@ -111,6 +113,8 @@ button:disabled { opacity: .5; cursor: default; }
 .badge.streaming { color: var(--ok); }
 .badge.starting, .badge.retrying { color: var(--warn); }
 .badge.paused { color: var(--muted); }
+
+.notice { margin: 0; color: var(--ok); font-size: 12px; -webkit-user-select: text; user-select: text; }
 
 .error { margin: 0; color: var(--err); font-size: 12px; -webkit-user-select: text; user-select: text; }
 

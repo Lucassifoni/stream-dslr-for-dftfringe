@@ -63,6 +63,7 @@ function render(s) {
   $("play").setAttribute("aria-pressed", String(s.playing));
   $("play").querySelector(".label").textContent = s.playing ? "Pause" : "Play";
   $("play").disabled = Boolean(s.serverError);
+  $("save").disabled = !s.hasFrame;
   $("state").textContent = s.state;
   $("state").className = `badge ${s.state}`;
   $("details").textContent = describe(s);
@@ -111,6 +112,29 @@ $("format").addEventListener("change", applyConfig);
 $("play").addEventListener("click", async () => {
   await invoke("set_playing", { playing: !(current && current.playing) });
   refresh();
+});
+function timestampStem(date) {
+  const pad = (n) => String(n).padStart(2, "0");
+  const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  const time = `${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`;
+  return `livestream-${day}_${time}`;
+}
+
+let noticeTimer = null;
+function showNotice(message) {
+  $("notice").textContent = message;
+  $("notice").hidden = false;
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => ($("notice").hidden = true), 4000);
+}
+
+$("save").addEventListener("click", async () => {
+  try {
+    const path = await invoke("save_frame", { stem: timestampStem(new Date()) });
+    showNotice(`Saved ${path}`);
+  } catch (e) {
+    showError(String(e));
+  }
 });
 $("show-preview").addEventListener("change", (e) => setPreview(e.target.checked));
 $("preview").addEventListener("error", () => setTimeout(() => setPreview($("show-preview").checked), 1000));

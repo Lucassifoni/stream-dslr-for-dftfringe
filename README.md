@@ -51,9 +51,18 @@ In DFTFringe: Live view → Settings → paste the URL, press Enter.
 - **Stills**: real captures (L = 5184×3456), ~1.1 s/frame at best.
   **Every frame is a shutter actuation** (550D rated ~100k). Use manual focus
   and manual exposure. Interval 1–20 s (OpenCV's FFmpeg reader times out ~30 s).
+- **Save frame** writes the current frame to the Desktop as
+  `livestream-<date>_<time>.jpg`, byte-for-byte (full size + EXIF in stills mode).
 - **Pause** stops the camera; DFTFringe stays connected (the last frame is
   re-sent every 2 s). Pause DFTFringe's analysis loop too, or it re-analyses it.
 
 ## Python POC
 
     cd python-poc && python3 -m livestream [--mode stills] && python3 -m unittest
+
+## DFTFringe tip: "Grab Igram" does nothing on macOS
+
+DFTFringe saves grabbed frames to its "Path to igrams to import", which
+defaults to `.` — that is `/` for an app opened from Finder, so the save fails
+silently. Set it in DFTFringe: Settings → Igram → "Import interferogram
+configuration (what hot key "i" does)" → pick a writable folder.

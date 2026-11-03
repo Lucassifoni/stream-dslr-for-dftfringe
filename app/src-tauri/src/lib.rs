@@ -1,11 +1,12 @@
 //! Tauri shell around `livestream-core`: starts the MJPEG server on
 //! 127.0.0.1:8765, owns the gphoto2 supervisor, and exposes three commands
-//! (`get_status`, `set_playing`, `set_config`) to the UI.
+//! (`get_status`, `set_playing`, `set_config`, `save_frame`) to the UI.
 
 use std::sync::Arc;
 
 use livestream_core::hub::FrameHub;
 use livestream_core::server::{self, ServerOptions, STREAM_PATH};
+use livestream_core::snapshot;
 use livestream_core::source::{
     self, CaptureConfig, Mode, SourceState, SourceStatus, Supervisor, SupervisorOptions, JPEG_FORMATS,
     MAX_STILLS_INTERVAL,
@@ -72,6 +73,7 @@ pub struct StatusDto {
     pub last_error: Option<String>,
     pub spawns: u64,
     pub clients: usize,
+    pub has_frame: bool,
     pub stream_url: String,
     pub server_error: Option<String>,
     pub gphoto2: Option<String>,
@@ -99,6 +101,7 @@ struct AppState {
 pub fn status_dto(
     s: SourceStatus,
     clients: usize,
+    has_frame: bool,
     stream_url: &str,
     server_error: Option<&str>,
     gphoto2: Option<String>,
@@ -116,6 +119,7 @@ pub fn status_dto(
         last_error: s.last_error,
         spawns: s.spawns,
         clients,
+        has_frame,
         stream_url: stream_url.to_string(),
         server_error: server_error.map(str::to_string),
         gphoto2,
@@ -129,6 +133,7 @@ fn get_status(state: State<'_, AppState>) -> StatusDto {
     status_dto(
         state.supervisor.status(),
         state.hub.clients(),
+        state.hub.latest().1.is_some(),
         &state.stream_url,
         state.server_error.as_deref(),
         source::locate_gphoto2().map(|p| p.display().to_string()),
@@ -138,6 +143,16 @@ fn get_status(state: State<'_, AppState>) -> StatusDto {
 #[tauri::command]
 fn set_playing(state: State<'_, AppState>, playing: bool) {
     state.supervisor.set_playing(playing);
+}
+
+/// Save the latest frame to the Desktop as `<stem>.jpg`; returns the written path.
+#[tauri::command]
+fn save_frame(app: tauri::AppHandle, state: State<'_, AppState>, stem: String) -> Result<String, String> {
+    let frame = state.hub.latest().1.ok_or("no frame to save yet")?;
+    let dir = app.path().desktop_dir().map_err(|e| format!("no Desktop folder: {e}"))?;
+    snapshot::save_frame(&dir, &stem, &frame)
+        .map(|path| path.display().to_string())
+        .map_err(|e| format!("cannot save frame in {}: {e}", dir.display()))
 }
 
 #[tauri::command]
@@ -165,7 +180,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(state)
-        .invoke_handler(tauri::generate_handler![get_status, set_playing, set_config])
+        .invoke_handler(tauri::generate_handler![get_status, set_playing, set_config, save_frame])
         .build(tauri::generate_context!())
         .expect("failed to build the Tauri application")
         .run(|app, event| {
@@ -205,13 +220,14 @@ mod tests {
             last_error: None,
             spawns: 1,
         };
-        let value = serde_json::to_value(status_dto(s, 2, "http://x/video_feed", None, None)).unwrap();
+        let value = serde_json::to_value(status_dto(s, 2, true, "http://x/video_feed", None, None)).unwrap();
         assert_eq!(value["state"], "streaming");
         assert_eq!(value["config"]["mode"], "liveview");
         assert_eq!(value["config"]["imageFormat"], "L");
         assert_eq!(value["width"], 1056);
         assert_eq!(value["lastFrameAgeMs"], 42);
         assert_eq!(value["clients"], 2);
+        assert_eq!(value["hasFrame"], true);
         assert_eq!(value["maxInterval"], MAX_STILLS_INTERVAL);
     }
 }

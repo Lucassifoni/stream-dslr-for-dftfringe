@@ -5,4 +5,5 @@
 pub mod hub;
 pub mod jpeg;
 pub mod server;
+pub mod snapshot;
 pub mod source;

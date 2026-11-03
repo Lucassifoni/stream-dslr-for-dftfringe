@@ -23,9 +23,12 @@
         <button type="button" role="radio" data-mode="stills" aria-checked="false">Stills</button>
       </div>
 
-      <button id="play" type="button" class="play" aria-pressed="false">
-        <span class="icon" aria-hidden="true"></span><span class="label">Play</span>
-      </button>
+      <div class="actions">
+        <button id="save" type="button" disabled title="Save the current frame to the Desktop">Save frame</button>
+        <button id="play" type="button" class="play" aria-pressed="false">
+          <span class="icon" aria-hidden="true"></span><span class="label">Play</span>
+        </button>
+      </div>
     </section>
 
     <section id="stills-options" class="stills-options" hidden>
@@ -43,6 +46,7 @@
       <span id="details"></span>
     </section>
     <p id="error" class="error" hidden></p>
+    <p id="notice" class="notice" hidden></p>
 
     <section class="preview">
       <label class="toggle"><input id="show-preview" type="checkbox" checked> Preview</label>
