@@ -106,6 +106,36 @@ fn config_change_while_playing_restarts_producer() {
 }
 
 #[test]
+fn dimensions_reset_while_new_run_starts() {
+    let hub = Arc::new(FrameHub::new());
+    let live = fixture("dims-live", &fake_jpeg(1056, 704));
+    let still = fixture("dims-still", &fake_jpeg(5184, 3456));
+    let slow_stills = Box::new(move |config: &CaptureConfig| {
+        let mut command = Command::new("/bin/sh");
+        match config.mode {
+            Mode::Liveview => command
+                .arg("-c")
+                .arg("trap 'exit 0' INT; while :; do cat \"$0\"; sleep 0.02; done")
+                .arg(&live),
+            Mode::Stills => command
+                .arg("-c")
+                .arg("trap 'exit 0' INT; sleep 0.5; cat \"$0\"; while :; do sleep 0.05; done")
+                .arg(&still),
+        };
+        Ok(command)
+    });
+    let sup = Supervisor::new(hub, slow_stills, None, options());
+    sup.set_playing(true);
+    eventually("liveview dims", || sup.status().dimensions == Some((1056, 704)));
+    sup.set_config(CaptureConfig { mode: Mode::Stills, interval: 1, image_format: "L".into() }).unwrap();
+    eventually("stale dims cleared", || {
+        let s = sup.status();
+        s.state == SourceState::Starting && s.dimensions.is_none() && s.frames == 0
+    });
+    eventually("stills dims", || sup.status().dimensions == Some((5184, 3456)));
+}
+
+#[test]
 fn missing_producer_reports_error_and_retries() {
     let hub = Arc::new(FrameHub::new());
     let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));

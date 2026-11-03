@@ -430,6 +430,7 @@ impl Inner {
             c.state = SourceState::Starting;
             c.frames = 0;
             c.recent.clear();
+            c.dimensions = None;
         }
         if let Some(hook) = &self.before_start {
             hook();
