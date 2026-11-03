@@ -3,7 +3,11 @@
 Streams a gphoto2-supported camera (tested: Canon EOS 550D) as MJPEG over HTTP
 at `http://127.0.0.1:8765/video_feed`, which DFTFringe's Live View opens as a URL.
 
-- `app/` — macOS desktop app (Tauri 2, Rust). Mode selector (liveview / stills),
+![Livestream app in stills mode](screenshots/app.png)
+
+![The stream in DFTFringe's Live View](screenshots/dftfringe.png)
+
+- `app/` — desktop app for macOS and Linux (Tauri 2, Rust). Mode selector (liveview / stills),
   play/pause, live preview, status. **This is the main tool.**
 - `python-poc/` — original command-line proof of concept, same stream format.
 
