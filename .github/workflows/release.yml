@@ -38,7 +38,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             bundles: dmg
             artifact: target/release/bundle/dmg/*.dmg
           - os: ubuntu-22.04
