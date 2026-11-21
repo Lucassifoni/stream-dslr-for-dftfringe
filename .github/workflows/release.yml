@@ -65,6 +65,9 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
+      - name: UI tests
+        run: node --test ui/model.test.js
+
       - name: Tauri CLI
         run: npm ci --ignore-scripts --no-audit --no-fund
 

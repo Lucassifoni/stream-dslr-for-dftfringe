@@ -1,175 +1,71 @@
-//! Capture configuration, gphoto2 command building, and the process supervisor.
+//! Capture configuration and the producer process supervisor.
 //!
 //! The [`Supervisor`] owns one background thread that spawns the producer
-//! (gphoto2) while playing, splits its stdout into JPEG frames, publishes
-//! them to the [`FrameHub`], and respawns it after unexpected exits. Every
-//! user action (play/pause, config change) bumps a generation counter and
-//! interrupts the current child with SIGINT, which gphoto2 handles by
-//! leaving liveview / finishing the capture cleanly; SIGKILL follows after a
-//! grace period.
+//! (gphoto2 for DSLRs, ffmpeg for UVC cameras, gst-launch for GenICam cameras) while playing, splits its stdout
+//! into JPEG frames, publishes them to the [`FrameHub`], and respawns it after
+//! unexpected exits. Every user action (play/pause, config change) bumps a
+//! generation counter and interrupts the current child with SIGINT, which
+//! both producers handle by stopping cleanly; SIGKILL follows after a grace
+//! period.
 
 use std::collections::VecDeque;
-use std::env;
-use std::ffi::OsString;
 use std::io::{BufRead, BufReader, ErrorKind, Read};
-use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crate::aravis::{self, AravisConfig};
+use crate::camera::{self, CameraConfig};
+use crate::dslr::{self, DslrConfig};
 use crate::hub::FrameHub;
 use crate::jpeg::{self, JpegSplitter};
-
-/// Canon JPEG-only `imageformat` choices; RAW variants would put CR2 data on stdout.
-pub const JPEG_FORMATS: [&str; 6] = ["L", "cL", "M", "cM", "S", "cS"];
-
-/// OpenCV's FFmpeg backend gives up on a read after ~30 s, so keep stills well below.
-pub const MAX_STILLS_INTERVAL: u32 = 20;
-
-/// Locations checked after `PATH`, since macOS GUI apps do not inherit the shell PATH.
-pub const GPHOTO2_FALLBACKS: [&str; 4] = [
-    "/opt/homebrew/bin/gphoto2",
-    "/usr/local/bin/gphoto2",
-    "/opt/local/bin/gphoto2",
-    "/usr/bin/gphoto2",
-];
 
 const RECENT_FRAMES: usize = 10;
 const STDERR_LINES: usize = 20;
 const READ_CHUNK: usize = 64 * 1024;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Mode {
-    /// Preview frames via `--capture-movie` (fast, ~1056x704 on EOS, no shutter).
-    Liveview,
-    /// Full captures via `--capture-image-and-download` (fires the shutter each frame).
-    Stills,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CaptureConfig {
-    pub mode: Mode,
-    /// Stills only: seconds between captures, whole seconds as gphoto2 requires.
-    pub interval: u32,
-    /// Stills only: one of [`JPEG_FORMATS`].
-    pub image_format: String,
+/// What to stream from.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CaptureConfig {
+    /// A gphoto2-supported camera (liveview or stills).
+    Dslr(DslrConfig),
+    /// A UVC / V4L2 / AVFoundation camera through ffmpeg.
+    Camera(CameraConfig),
+    /// A GenICam (USB3 Vision / GigE Vision) camera through Aravis and GStreamer.
+    Aravis(AravisConfig),
 }
 
 impl Default for CaptureConfig {
     fn default() -> Self {
-        Self {
-            mode: Mode::Liveview,
-            interval: 1,
-            image_format: "L".into(),
-        }
+        CaptureConfig::Dslr(DslrConfig::default())
     }
 }
 
 impl CaptureConfig {
     pub fn validate(&self) -> Result<(), String> {
-        match self.mode {
-            Mode::Liveview => Ok(()),
-            Mode::Stills if !JPEG_FORMATS.contains(&self.image_format.as_str()) => Err(format!(
-                "image format {:?} is not JPEG-only, expected one of {JPEG_FORMATS:?}",
-                self.image_format
-            )),
-            Mode::Stills if !(1..=MAX_STILLS_INTERVAL).contains(&self.interval) => Err(format!(
-                "interval must be between 1 and {MAX_STILLS_INTERVAL} seconds, got {}",
-                self.interval
-            )),
-            Mode::Stills => Ok(()),
-        }
-    }
-
-    /// gphoto2 arguments writing concatenated JPEGs to stdout until interrupted.
-    ///
-    /// Stills force the capture target to internal RAM (by index, since labels
-    /// are localised) so nothing accumulates on the card.
-    pub fn gphoto2_args(&self) -> Vec<String> {
-        match self.mode {
-            Mode::Liveview => vec!["--capture-movie".into(), "--stdout".into()],
-            Mode::Stills => vec![
-                "--set-config-index".into(),
-                "capturetarget=0".into(),
-                "--set-config".into(),
-                format!("imageformat={}", self.image_format),
-                "--capture-image-and-download".into(),
-                "--interval".into(),
-                self.interval.to_string(),
-                "--stdout".into(),
-            ],
+        match self {
+            CaptureConfig::Dslr(c) => c.validate(),
+            CaptureConfig::Camera(c) => c.validate(),
+            CaptureConfig::Aravis(c) => c.validate(),
         }
     }
 }
 
-/// First executable `gphoto2` in `path_var`, then in `fallbacks`.
-pub fn find_gphoto2(path_var: Option<OsString>, fallbacks: &[&str]) -> Option<PathBuf> {
-    let from_path = path_var
-        .map(|p| env::split_paths(&p).map(|dir| dir.join("gphoto2")).collect::<Vec<_>>())
-        .unwrap_or_default();
-    from_path
-        .into_iter()
-        .chain(fallbacks.iter().map(PathBuf::from))
-        .find(|p| is_executable(p))
-}
-
-/// [`find_gphoto2`] against the process `PATH` and [`GPHOTO2_FALLBACKS`].
-pub fn locate_gphoto2() -> Option<PathBuf> {
-    find_gphoto2(env::var_os("PATH"), &GPHOTO2_FALLBACKS)
-}
-
-fn is_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    path.metadata()
-        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
-}
-
-/// Build the gphoto2 command for `config`, failing with an actionable message if absent.
-pub fn gphoto2_command(config: &CaptureConfig) -> Result<Command, String> {
-    let binary = locate_gphoto2().ok_or_else(|| {
-        format!(
-            "gphoto2 not found in PATH or {} — install it with `{}`",
-            GPHOTO2_FALLBACKS.join(", "),
-            install_hint(env::consts::OS)
-        )
-    })?;
-    let mut command = Command::new(binary);
-    command.args(config.gphoto2_args());
-    Ok(command)
-}
-
-/// Package manager command installing gphoto2 on `os` (as in [`std::env::consts::OS`]).
-pub fn install_hint(os: &str) -> &'static str {
-    match os {
-        "macos" => "brew install gphoto2",
-        "linux" => "sudo apt install gphoto2",
-        _ => "install gphoto2 with your package manager",
+/// The producer command for `config` (the default [`CommandFactory`]).
+pub fn producer_command(config: &CaptureConfig) -> Result<Command, String> {
+    match config {
+        CaptureConfig::Dslr(c) => dslr::gphoto2_command(c),
+        CaptureConfig::Camera(c) => camera::ffmpeg_command(c),
+        CaptureConfig::Aravis(c) => aravis::gst_command(c),
     }
 }
 
-/// Commands killing desktop services that claim PTP cameras and block libgphoto2:
-/// macOS's PTPCamera daemon, GNOME/GVFS's gphoto2 monitor on Linux.
-pub fn camera_claimer_commands(os: &str) -> Vec<Vec<&'static str>> {
-    match os {
-        "macos" => vec![vec!["/usr/bin/killall", "PTPCamera"]],
-        "linux" => vec![
-            vec!["pkill", "-f", "gvfs-gphoto2-volume-monitor"],
-            vec!["pkill", "-f", "gvfsd-gphoto2"],
-        ],
-        _ => vec![],
-    }
-}
-
-/// Run [`camera_claimer_commands`] for the current OS, ignoring failures.
-pub fn release_camera_claimers() {
-    for argv in camera_claimer_commands(env::consts::OS) {
-        let _ = Command::new(argv[0])
-            .args(&argv[1..])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+/// Pre-spawn step for `config` (the default [`Hook`]): DSLRs need desktop
+/// services that claim PTP cameras stopped first.
+pub fn prepare(config: &CaptureConfig) {
+    if let CaptureConfig::Dslr(_) = config {
+        dslr::release_camera_claimers();
     }
 }
 
@@ -206,8 +102,8 @@ pub struct SourceStatus {
 
 /// Builds the producer command for a configuration.
 pub type CommandFactory = Box<dyn Fn(&CaptureConfig) -> Result<Command, String> + Send + Sync>;
-/// Runs before every spawn (e.g. [`release_camera_claimers`]).
-pub type Hook = Box<dyn Fn() + Send + Sync>;
+/// Runs before every spawn with the config about to start (e.g. [`prepare`]).
+pub type Hook = Box<dyn Fn(&CaptureConfig) + Send + Sync>;
 
 #[derive(Clone, Copy, Debug)]
 pub struct SupervisorOptions {
@@ -433,7 +329,7 @@ impl Inner {
             c.dimensions = None;
         }
         if let Some(hook) = &self.before_start {
-            hook();
+            hook(config);
         }
         let spawned = (self.factory)(config).and_then(|mut command| {
             command
@@ -546,81 +442,21 @@ fn collect_lines(stream: impl Read, sink: &Mutex<VecDeque<String>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-
-    fn stills(interval: u32, format: &str) -> CaptureConfig {
-        CaptureConfig {
-            mode: Mode::Stills,
-            interval,
-            image_format: format.into(),
-        }
-    }
 
     #[test]
-    fn liveview_args() {
-        assert_eq!(CaptureConfig::default().gphoto2_args(), ["--capture-movie", "--stdout"]);
-    }
-
-    #[test]
-    fn stills_args() {
-        assert_eq!(
-            stills(3, "M").gphoto2_args(),
-            [
-                "--set-config-index",
-                "capturetarget=0",
-                "--set-config",
-                "imageformat=M",
-                "--capture-image-and-download",
-                "--interval",
-                "3",
-                "--stdout"
-            ]
-        );
-    }
-
-    #[test]
-    fn validation() {
+    fn validation_dispatches_per_source() {
         assert!(CaptureConfig::default().validate().is_ok());
-        assert!(stills(1, "L").validate().is_ok());
-        assert!(stills(MAX_STILLS_INTERVAL, "cS").validate().is_ok());
-        assert!(stills(1, "RAW").validate().is_err());
-        assert!(stills(1, "RAW + L").validate().is_err());
-        assert!(stills(0, "L").validate().is_err());
-        assert!(stills(MAX_STILLS_INTERVAL + 1, "L").validate().is_err());
-    }
-
-    #[test]
-    fn find_gphoto2_prefers_path_then_fallbacks() {
-        use std::os::unix::fs::PermissionsExt;
-        let root = env::temp_dir().join(format!("livestream-find-{}", std::process::id()));
-        let (a, b) = (root.join("a"), root.join("b"));
-        fs::create_dir_all(&a).unwrap();
-        fs::create_dir_all(&b).unwrap();
-        let fallback = b.join("gphoto2");
-        fs::write(&fallback, "").unwrap();
-        fs::set_permissions(&fallback, fs::Permissions::from_mode(0o755)).unwrap();
-        let fallback_str = fallback.to_str().unwrap();
-        let path = env::join_paths([&a]).unwrap();
-
-        assert_eq!(find_gphoto2(Some(path.clone()), &[fallback_str]), Some(fallback.clone()));
-
-        let not_exec = a.join("gphoto2");
-        fs::write(&not_exec, "").unwrap();
-        assert_eq!(find_gphoto2(Some(path.clone()), &[fallback_str]), Some(fallback.clone()));
-
-        fs::set_permissions(&not_exec, fs::Permissions::from_mode(0o755)).unwrap();
-        assert_eq!(find_gphoto2(Some(path), &[fallback_str]), Some(not_exec));
-        assert_eq!(find_gphoto2(None, &["/nonexistent/gphoto2"]), None);
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn per_os_camera_claimers_and_hints() {
-        assert_eq!(camera_claimer_commands("macos"), vec![vec!["/usr/bin/killall", "PTPCamera"]]);
-        assert!(camera_claimer_commands("linux").iter().all(|c| c[0] == "pkill"));
-        assert!(camera_claimer_commands("windows").is_empty());
-        assert_eq!(install_hint("macos"), "brew install gphoto2");
-        assert_eq!(install_hint("linux"), "sudo apt install gphoto2");
+        let bad_dslr = DslrConfig { mode: dslr::Mode::Stills, interval: 0, ..DslrConfig::default() };
+        assert!(CaptureConfig::Dslr(bad_dslr).validate().is_err());
+        let bad_camera = CameraConfig {
+            backend: camera::Backend::V4l2,
+            device: String::new(),
+            format: Some("MJPG".into()),
+            width: 640,
+            height: 480,
+            rate: camera::FrameRate { num: 30, den: 1 },
+        };
+        assert!(CaptureConfig::Camera(bad_camera).validate().is_err());
     }
 
     #[test]

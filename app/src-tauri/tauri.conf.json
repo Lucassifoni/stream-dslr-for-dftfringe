@@ -40,6 +40,6 @@
       "minimumSystemVersion": "11.0",
       "signingIdentity": "-"
     },
-    "shortDescription": "Camera liveview/stills MJPEG stream for DFTFringe"
+    "shortDescription": "DSLR, UVC and GenICam camera MJPEG stream for DFTFringe"
   }
 }

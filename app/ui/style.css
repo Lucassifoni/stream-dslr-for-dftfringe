@@ -104,8 +104,26 @@ button:disabled { opacity: .5; cursor: default; }
   border-right: 4px solid currentColor;
 }
 
-.stills-options { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
-.stills-options input { width: 64px; }
+.options { display: flex; flex-direction: column; gap: 10px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+.row label { display: inline-flex; gap: 6px; align-items: center; }
+.row select { max-width: 320px; }
+input.short { width: 72px; }
+#arv-exposure { width: 96px; }
+.icon-button { padding: 4px 9px; line-height: 1; }
+.hint { margin: 0; color: var(--muted); font-size: 12px; }
+.unit { color: var(--muted); font-size: 12px; }
+
+.control-panel { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); padding: 6px 10px; }
+.control-panel summary { cursor: pointer; color: var(--muted); font-size: 12px; padding: 2px 0; }
+.control-list { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; padding: 6px 2px 2px; }
+.control { display: grid; grid-template-columns: minmax(140px, 1fr) minmax(120px, 2fr) auto auto; gap: 8px; align-items: center; }
+.control.inactive .control-name { opacity: .55; }
+.control-name { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.control input[type="range"] { width: 100%; padding: 0; }
+.control input[type="checkbox"], .control select, .control > button:not(.icon-button) { justify-self: start; }
+.control input[type="checkbox"] { grid-column: span 2; }
+.control select, .control > button:not(.icon-button) { grid-column: span 2; }
 .warning { margin: 0; color: var(--warn); font-size: 12px; }
 
 .status { display: flex; gap: 10px; align-items: center; color: var(--muted); font-variant-numeric: tabular-nums; }

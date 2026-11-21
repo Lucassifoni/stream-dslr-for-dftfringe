@@ -6,7 +6,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use livestream_core::hub::FrameHub;
-use livestream_core::source::{CaptureConfig, Mode, SourceState, Supervisor, SupervisorOptions};
+use livestream_core::dslr::{DslrConfig, Mode};
+use livestream_core::source::{CaptureConfig, SourceState, Supervisor, SupervisorOptions};
 
 fn fake_jpeg(width: u16, height: u16) -> Vec<u8> {
     let mut out = vec![0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x0B, 8];
@@ -16,6 +17,17 @@ fn fake_jpeg(width: u16, height: u16) -> Vec<u8> {
     out.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x08, 1, 1, 0, 0, 0x3F, 0]);
     out.extend_from_slice(&[0x12, 0xFF, 0x00, 0x34, 0xFF, 0xD9]);
     out
+}
+
+fn stills(interval: u32, format: &str) -> CaptureConfig {
+    CaptureConfig::Dslr(DslrConfig { mode: Mode::Stills, interval, image_format: format.into() })
+}
+
+fn mode_of(config: &CaptureConfig) -> Mode {
+    match config {
+        CaptureConfig::Dslr(c) => c.mode,
+        _ => panic!("only DSLR configs are used by these fakes"),
+    }
 }
 
 fn fixture(name: &str, frame: &[u8]) -> PathBuf {
@@ -30,7 +42,7 @@ fn fixture(name: &str, frame: &[u8]) -> PathBuf {
 fn factory(liveview_frame: PathBuf, stills_frame: PathBuf) -> livestream_core::source::CommandFactory {
     Box::new(move |config: &CaptureConfig| {
         let mut command = Command::new("/bin/sh");
-        match config.mode {
+        match mode_of(config) {
             Mode::Liveview => command
                 .arg("-c")
                 .arg("trap 'exit 0' INT; while :; do cat \"$0\"; sleep 0.02; done")
@@ -82,7 +94,7 @@ fn play_pause_and_mode_switch() {
     assert_eq!(hub.latest().0, seq, "no frames after pause");
     assert_eq!(sup.status().spawns, 1);
 
-    sup.set_config(CaptureConfig { mode: Mode::Stills, interval: 1, image_format: "L".into() }).unwrap();
+    sup.set_config(stills(1, "L")).unwrap();
     assert_eq!(sup.status().spawns, 1, "config change while paused does not spawn");
     sup.set_playing(true);
     eventually("stills frames", || sup.status().dimensions == Some((5184, 3456)));
@@ -99,10 +111,10 @@ fn config_change_while_playing_restarts_producer() {
     let sup = Supervisor::new(hub, factory(live, still), None, options());
     sup.set_playing(true);
     eventually("liveview", || sup.status().dimensions == Some((10, 10)));
-    sup.set_config(CaptureConfig { mode: Mode::Stills, interval: 2, image_format: "M".into() }).unwrap();
+    sup.set_config(stills(2, "M")).unwrap();
     eventually("stills", || sup.status().dimensions == Some((20, 20)));
-    assert!(sup.set_config(CaptureConfig { mode: Mode::Stills, interval: 1, image_format: "RAW".into() }).is_err());
-    assert_eq!(sup.status().config.image_format, "M");
+    assert!(sup.set_config(stills(1, "RAW")).is_err());
+    assert_eq!(sup.status().config, stills(2, "M"));
 }
 
 #[test]
@@ -112,7 +124,7 @@ fn dimensions_reset_while_new_run_starts() {
     let still = fixture("dims-still", &fake_jpeg(5184, 3456));
     let slow_stills = Box::new(move |config: &CaptureConfig| {
         let mut command = Command::new("/bin/sh");
-        match config.mode {
+        match mode_of(config) {
             Mode::Liveview => command
                 .arg("-c")
                 .arg("trap 'exit 0' INT; while :; do cat \"$0\"; sleep 0.02; done")
@@ -127,7 +139,7 @@ fn dimensions_reset_while_new_run_starts() {
     let sup = Supervisor::new(hub, slow_stills, None, options());
     sup.set_playing(true);
     eventually("liveview dims", || sup.status().dimensions == Some((1056, 704)));
-    sup.set_config(CaptureConfig { mode: Mode::Stills, interval: 1, image_format: "L".into() }).unwrap();
+    sup.set_config(stills(1, "L")).unwrap();
     eventually("stale dims cleared", || {
         let s = sup.status();
         s.state == SourceState::Starting && s.dimensions.is_none() && s.frames == 0
@@ -154,4 +166,19 @@ fn missing_producer_reports_error_and_retries() {
     let status = sup.status();
     assert_eq!(status.state, SourceState::Retrying);
     assert_eq!(status.last_error.as_deref(), Some("gphoto2 not found"));
+}
+
+#[test]
+fn hook_receives_the_config_being_started() {
+    let hub = Arc::new(FrameHub::new());
+    let live = fixture("hook-live", &fake_jpeg(10, 10));
+    let still = fixture("hook-still", &fake_jpeg(20, 20));
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = seen.clone();
+    let hook: livestream_core::source::Hook = Box::new(move |c: &CaptureConfig| sink.lock().unwrap().push(c.clone()));
+    let sup = Supervisor::new(hub, factory(live, still), Some(hook), options());
+    sup.set_config(stills(2, "M")).unwrap();
+    sup.set_playing(true);
+    eventually("hook called", || !seen.lock().unwrap().is_empty());
+    assert_eq!(seen.lock().unwrap()[0], stills(2, "M"));
 }

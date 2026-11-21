@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Livestream</title>
   <link rel="stylesheet" href="style.css">
-  <script src="main.js" defer></script>
+  <script type="module" src="main.js"></script>
 </head>
 <body>
   <main>
@@ -18,9 +18,10 @@
     </section>
 
     <section class="controls">
-      <div class="segmented" role="radiogroup" aria-label="Capture mode">
-        <button type="button" role="radio" data-mode="liveview" aria-checked="true">Liveview</button>
-        <button type="button" role="radio" data-mode="stills" aria-checked="false">Stills</button>
+      <div id="sources" class="segmented" role="radiogroup" aria-label="Source">
+        <button type="button" role="radio" data-source="dslr" aria-checked="true" title="gphoto2 camera (DSLR)">DSLR</button>
+        <button type="button" role="radio" data-source="camera" aria-checked="false" title="UVC / V4L2 camera through ffmpeg">Camera</button>
+        <button type="button" role="radio" data-source="aravis" aria-checked="false" title="USB3 Vision / GigE Vision camera through Aravis">GenICam</button>
       </div>
 
       <div class="actions">
@@ -31,14 +32,62 @@
       </div>
     </section>
 
-    <section id="stills-options" class="stills-options" hidden>
-      <label>Every
-        <input id="interval" type="number" min="1" max="20" step="1" value="1"> s
-      </label>
-      <label>Format
-        <select id="format"></select>
-      </label>
-      <p class="warning">Each frame fires the shutter. Use manual focus.</p>
+    <section id="dslr-options" class="options">
+      <div id="modes" class="segmented" role="radiogroup" aria-label="Capture mode">
+        <button type="button" role="radio" data-mode="liveview" aria-checked="true">Liveview</button>
+        <button type="button" role="radio" data-mode="stills" aria-checked="false">Stills</button>
+      </div>
+      <div id="stills-options" class="row" hidden>
+        <label>Every
+          <input id="interval" class="short" type="number" min="1" max="20" step="1" value="1"> s
+        </label>
+        <label>Format
+          <select id="format"></select>
+        </label>
+        <p class="warning">Each frame fires the shutter. Use manual focus.</p>
+      </div>
+    </section>
+
+    <section id="camera-options" class="options" hidden>
+      <div class="row">
+        <label>Device <select id="cam-device"></select></label>
+        <button id="cam-refresh" type="button" class="icon-button" title="Rescan cameras">↻</button>
+        <label>Format <select id="cam-format"></select></label>
+        <label>Size <select id="cam-size"></select></label>
+        <label>FPS <select id="cam-fps"></select></label>
+      </div>
+      <p id="cam-note" class="hint" hidden></p>
+      <details id="cam-controls" class="control-panel" open hidden>
+        <summary>Camera controls <span class="hint">applied live</span></summary>
+        <div id="cam-control-list" class="control-list"></div>
+      </details>
+    </section>
+
+    <section id="aravis-options" class="options" hidden>
+      <div class="row">
+        <label>Camera <select id="arv-camera"></select></label>
+        <button id="arv-refresh" type="button" class="icon-button" title="Rescan cameras (pause first)">↻</button>
+        <label>Pixels <select id="arv-format"></select></label>
+        <label>Binning <select id="arv-binning"></select></label>
+      </div>
+      <div class="row">
+        <label>Frame rate
+          <select id="arv-fps-mode">
+            <option value="unchanged">camera</option>
+            <option value="manual">fixed</option>
+          </select>
+          <input id="arv-fps" class="short" type="number" step="any" hidden>
+        </label>
+        <label>Exposure
+          <select id="arv-exposure-mode"></select>
+          <input id="arv-exposure" type="number" step="any" hidden> <span class="unit">µs</span>
+        </label>
+        <label>Gain
+          <select id="arv-gain-mode"></select>
+          <input id="arv-gain" class="short" type="number" step="any" hidden>
+        </label>
+      </div>
+      <p id="arv-note" class="hint">Settings apply when the stream starts; changing one restarts it.</p>
     </section>
 
     <section class="status" aria-live="polite">

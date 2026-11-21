@@ -2,7 +2,7 @@
 name = "livestream-core"
 version = "0.1.1"
 edition = "2021"
-description = "gphoto2 liveview/stills supervisor and MJPEG HTTP server (no dependencies)"
+description = "Camera producer supervisor (gphoto2, ffmpeg, Aravis), V4L2 controls and MJPEG HTTP server (no dependencies)"
 publish = false
 
 [dependencies]

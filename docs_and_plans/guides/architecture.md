@@ -2,13 +2,23 @@
 
 ## Pipeline
 
-    gphoto2 ... --stdout               (concatenated JPEGs, no container)
-      → Supervisor    app/core/src/source.rs   process supervisor, play/pause, mode, respawn
+    producer --stdout                  (concatenated JPEGs, no container)
+      gphoto2       app/core/src/dslr.rs     DSLR liveview / stills
+      ffmpeg        app/core/src/camera.rs   UVC: V4L2 (Linux), AVFoundation (macOS)
+      gst-launch    app/core/src/aravis.rs   GenICam: aravissrc ! videoconvert ! jpegenc ! fdsink
+      → Supervisor    app/core/src/source.rs   process supervisor, play/pause, config, respawn
       → JpegSplitter  app/core/src/jpeg.rs     pure, marker-aware frame splitter (+ SOF dimensions)
       → FrameHub      app/core/src/hub.rs      latest frame + seq, paused flag, Condvar
       → HTTP server   app/core/src/server.rs   std::net, thread per client, multipart on /video_feed
-      → Tauri shell   app/src-tauri/src/lib.rs commands get_status / set_playing / set_config
-      → UI            app/ui/                  vanilla JS, polls status every 500 ms
+      → Tauri shell   app/src-tauri/src/lib.rs status, config, discovery, V4L2 controls
+      → UI            app/ui/                  vanilla JS (pure form logic in model.js), polls status every 500 ms
+
+Side channels, outside the producer:
+
+- `v4l2.rs`: device discovery and controls through raw ioctls (see below).
+- `avfoundation.rs`: discovery by parsing ffmpeg stderr.
+- `aravis.rs`: discovery by parsing `arv-tool-0.8` output.
+- `tools.rs`: locating binaries (PATH, then Homebrew / MacPorts / system dirs).
 
 The Python POC in `python-poc/` has the same structure (no pause/keepalive).
 Frames are passed through untouched (no re-encode). Slow clients skip frames
@@ -79,3 +89,65 @@ Naive splitting on `FFD9` breaks on frames carrying EXIF thumbnails. The
 splitter walks marker segments by length and only searches for EOI inside
 entropy-coded data, where `FF` is followed by `00` (stuffing) or `D0–D7`
 (restarts). Malformed/oversized frames are dropped and it resyncs on the next SOI.
+
+## Camera source (UVC / V4L2, AVFoundation)
+
+- Producer: `ffmpeg -f v4l2 -input_format <fmt> -video_size WxH -framerate N/D -i /dev/videoN`
+  then `-c:v copy` for MJPG (untouched frames) or `-c:v mjpeg -q:v 2` for
+  anything else, `-f mjpeg -` to stdout. ffmpeg exits cleanly on SIGINT.
+- Frame rates are kept as exact V4L2 fractions (`333333/10000000`) so ffmpeg
+  requests the interval the driver listed.
+- `mjpeg2jpeg` is not used: it only accepts AVI1 frames. UVC MJPEG frames
+  tested so far carry their Huffman tables.
+- The fps shown in the first second is inflated: ffmpeg probes a few frames
+  then flushes them at once. It settles on the real rate.
+
+### V4L2 without dependencies
+
+`v4l2.rs` declares `ioctl(2)` itself (std already links libc) and handles the
+`videodev2.h` structs as byte buffers at fixed UAPI offsets. Only the ioctl
+call is unsafe; enumeration, deduplication and control logic run against an
+`Ioctl` trait and are tested with a fake UVC device. Request numbers are
+checked against the kernel header values in tests.
+
+- Capture nodes: `device_caps & V4L2_CAP_VIDEO_CAPTURE`; UVC also exposes
+  metadata-only nodes (`/dev/video1`, `/dev/video3` for the test camera).
+- Firmwares list sizes and intervals twice; discovery dedupes.
+- Menus can have gaps (`auto_exposure`: 1 = manual, 3 = aperture priority).
+- Controls are set with `VIDIOC_S_CTRL` on a second open while ffmpeg streams;
+  V4L2 only makes streaming exclusive. Switching an auto control flips other
+  controls' `INACTIVE` flag, so the UI re-reads the list after each change.
+
+### Test camera (LAN box, `uvcvideo`)
+
+`/dev/video0`: MJPG and YUYV up to 1920×1080 (YUYV 1080p at 5 fps only);
+`/dev/video2`: H264 only. Controls: brightness, contrast, saturation, hue,
+gamma, gain, white balance auto/temperature, sharpness, backlight, power
+line, auto exposure, exposure time, dynamic framerate. Measured: MJPG and
+YUYV 1280×720 and H264 stream at the requested size.
+
+## GenICam source (Aravis)
+
+- Why: USB3 Vision / GigE Vision cameras are not UVC, so OpenCV's V4L2 backend
+  (DFTFringe's camera-index path) never sees them on Linux, even though vendor
+  viewers and Aravis do.
+- Producer: `gst-launch-1.0 -q -e aravissrc camera-name="<id>" [exposure-auto=off
+  exposure=µs] [gain-auto=off gain=x] [h-binning=n v-binning=n] !
+  video/x-raw,format=GRAY8[,framerate=N/D] ! videoconvert ! jpegenc quality=95 !
+  fdsink fd=1`. `-q` keeps progress messages off stdout; `-e` turns SIGINT
+  into EOS for a clean stop.
+- Exposure and gain go through `aravissrc` properties: Aravis maps them to the
+  vendor's feature names (`ExposureTime` vs legacy `ExposureTimeAbs`, `Gain`
+  vs `GainRaw`). `arv-tool-0.8 control` provides the ranges shown in the UI.
+- USB3 Vision gives one process control of the camera: settings apply at
+  pipeline start, and discovery fails while streaming (refresh is disabled
+  while playing).
+- The `features=` property of `aravissrc` failed on the simulator ("Controller
+  privilege required"), so free-form GenICam features are not exposed.
+- Bayer needs `bayer2rgb` (gst-plugins-bad); not offered.
+- `libaravis-0.8-0` ships no udev rules; non-root USB access relies on the
+  vendor SDK's rules.
+- Simulator: `arv-fake-gv-camera-0.8 -i 127.0.0.1` (package `aravis-tools`).
+  It only streams when loopback is the only interface (`docker run --network
+  none`); otherwise discovery goes through the bridge address and the stream
+  never arrives. It ignores binning and keeps the last frame rate set.
