@@ -1,6 +1,6 @@
 [package]
 name = "livestream-core"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 description = "Camera producer supervisor (gphoto2, ffmpeg, Aravis), V4L2 controls and MJPEG HTTP server (no dependencies)"
 publish = false
