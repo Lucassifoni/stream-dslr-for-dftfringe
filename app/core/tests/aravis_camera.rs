@@ -30,8 +30,7 @@ fn discovers_and_streams_with_settings() {
 
     let hub = Arc::new(FrameHub::new());
     let options = SupervisorOptions { restart_delay: Duration::from_millis(300), stop_grace: Duration::from_secs(3) };
-    let sup = Supervisor::new(hub, Box::new(source::producer_command), None, options);
-    let (width, height) = (dev.width.unwrap(), dev.height.unwrap());
+    let sup = Supervisor::new(hub, Box::new(source::producer_command), Some(Box::new(source::prepare)), options);
     let cases = [
         (dev.pixel_formats[0].clone(), 1, None, Level::Unchanged, Level::Unchanged),
         (dev.pixel_formats[0].clone(), 2, FrameRate::new(10, 1), Level::Manual(5000.0), Level::Manual(1.0)),
@@ -51,15 +50,30 @@ fn discovers_and_streams_with_settings() {
         }
         let status = sup.status();
         eprintln!("{pixel_format} binning {binning} rate {rate:?}: {:?} {:.1} fps", status.dimensions, status.fps);
-        let expected = ((width / binning) as u16, (height / binning) as u16);
         let actual = status.dimensions.unwrap();
-        assert!(actual == expected || actual == (width as u16, height as u16), "unexpected size {actual:?}");
         sup.set_playing(false);
         let deadline = Instant::now() + Duration::from_secs(10);
         while sup.status().state != SourceState::Paused {
             assert!(Instant::now() < deadline, "did not stop: {:?}", sup.status());
             std::thread::sleep(Duration::from_millis(50));
         }
+        std::thread::sleep(Duration::from_millis(500));
+        let out = std::process::Command::new(&arv_tool)
+            .args(["-n", &dev.id, "control", "BinningHorizontal", "BinningVertical", "Width", "Height"])
+            .output()
+            .unwrap();
+        let readings = aravis::parse_control(&String::from_utf8_lossy(&out.stdout));
+        eprintln!("camera after run: {readings:?}");
+        aravis::check_binning(&readings, binning).unwrap();
+        let region = aravis::full_region_writes(&readings).unwrap();
+        let value = |name: &str| {
+            readings.iter().find_map(|(n, r)| match r {
+                aravis::Reading::Number(range) if n == name => Some(range.value as u16),
+                _ => None,
+            })
+        };
+        eprintln!("full region would be {region:?}");
+        assert_eq!(actual, (value("Width").unwrap(), value("Height").unwrap()), "frames must match the camera region");
     }
     sup.shutdown();
 }

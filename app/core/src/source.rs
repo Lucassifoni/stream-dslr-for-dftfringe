@@ -62,10 +62,16 @@ pub fn producer_command(config: &CaptureConfig) -> Result<Command, String> {
 }
 
 /// Pre-spawn step for `config` (the default [`Hook`]): DSLRs need desktop
-/// services that claim PTP cameras stopped first.
-pub fn prepare(config: &CaptureConfig) {
-    if let CaptureConfig::Dslr(_) = config {
-        dslr::release_camera_claimers();
+/// services that claim PTP cameras stopped first; GenICam cameras get their
+/// binning written ([`aravis::prepare`]).
+pub fn prepare(config: &CaptureConfig) -> Result<(), String> {
+    match config {
+        CaptureConfig::Dslr(_) => {
+            dslr::release_camera_claimers();
+            Ok(())
+        }
+        CaptureConfig::Aravis(c) => aravis::prepare(c),
+        CaptureConfig::Camera(_) => Ok(()),
     }
 }
 
@@ -102,8 +108,9 @@ pub struct SourceStatus {
 
 /// Builds the producer command for a configuration.
 pub type CommandFactory = Box<dyn Fn(&CaptureConfig) -> Result<Command, String> + Send + Sync>;
-/// Runs before every spawn with the config about to start (e.g. [`prepare`]).
-pub type Hook = Box<dyn Fn(&CaptureConfig) + Send + Sync>;
+/// Runs before every spawn with the config about to start (e.g. [`prepare`]);
+/// an error is reported like a failed start and retried.
+pub type Hook = Box<dyn Fn(&CaptureConfig) -> Result<(), String> + Send + Sync>;
 
 #[derive(Clone, Copy, Debug)]
 pub struct SupervisorOptions {
@@ -328,8 +335,8 @@ impl Inner {
             c.recent.clear();
             c.dimensions = None;
         }
-        if let Some(hook) = &self.before_start {
-            hook(config);
+        if let Some(Err(message)) = self.before_start.as_ref().map(|hook| hook(config)) {
+            return self.fail(generation, message);
         }
         let spawned = (self.factory)(config).and_then(|mut command| {
             command

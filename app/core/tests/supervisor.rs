@@ -175,10 +175,27 @@ fn hook_receives_the_config_being_started() {
     let still = fixture("hook-still", &fake_jpeg(20, 20));
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let sink = seen.clone();
-    let hook: livestream_core::source::Hook = Box::new(move |c: &CaptureConfig| sink.lock().unwrap().push(c.clone()));
+    let hook: livestream_core::source::Hook = Box::new(move |c: &CaptureConfig| {
+        sink.lock().unwrap().push(c.clone());
+        Ok(())
+    });
     let sup = Supervisor::new(hub, factory(live, still), Some(hook), options());
     sup.set_config(stills(2, "M")).unwrap();
     sup.set_playing(true);
     eventually("hook called", || !seen.lock().unwrap().is_empty());
     assert_eq!(seen.lock().unwrap()[0], stills(2, "M"));
+}
+
+#[test]
+fn failing_hook_is_reported_and_the_producer_never_starts() {
+    let hub = Arc::new(FrameHub::new());
+    let live = fixture("hookfail-live", &fake_jpeg(10, 10));
+    let still = fixture("hookfail-still", &fake_jpeg(20, 20));
+    let hook: livestream_core::source::Hook = Box::new(|_: &CaptureConfig| Err("binning refused".to_string()));
+    let sup = Supervisor::new(hub, factory(live, still), Some(hook), options());
+    sup.set_playing(true);
+    eventually("hook error reported", || sup.status().last_error.as_deref() == Some("binning refused"));
+    let status = sup.status();
+    assert_eq!(status.state, SourceState::Retrying);
+    assert_eq!(status.spawns, 0);
 }

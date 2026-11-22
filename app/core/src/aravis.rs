@@ -9,6 +9,11 @@
 //! properties, which map to whatever feature names the vendor uses
 //! (`ExposureTime` / `ExposureTimeAbs`, `Gain` / `GainRaw`).
 //!
+//! Binning is not left to `aravissrc`: Aravis 0.8 fixes the caps from the
+//! unbinned region before writing the binning, so the negotiated size no
+//! longer matches the frames. [`prepare`] writes the binning and the full
+//! binned region with `arv-tool` before the pipeline starts instead.
+//!
 //! Discovery parses `arv-tool-0.8` output.
 
 use std::path::Path;
@@ -84,10 +89,6 @@ impl AravisConfig {
         args.push(format!("camera-name=\"{}\"", self.camera));
         args.extend(level_args("exposure", self.exposure));
         args.extend(level_args("gain", self.gain));
-        if self.binning > 1 {
-            args.push(format!("h-binning={}", self.binning));
-            args.push(format!("v-binning={}", self.binning));
-        }
         let format = caps_format(&self.pixel_format).unwrap_or("GRAY8");
         let caps = match self.rate {
             Some(rate) => format!("video/x-raw,format={format},framerate={rate}"),
@@ -287,6 +288,79 @@ pub fn listing(success: bool, stdout: &str, stderr: &str) -> Result<Vec<(String,
     }
 }
 
+/// Whether `readings` (of `BinningHorizontal` / `BinningVertical`) differ
+/// from the requested `binning`. A camera without binning accepts only 1.
+pub fn binning_differs(readings: &[(String, Reading)], binning: u32) -> Result<bool, String> {
+    let current = |name: &str| number(readings, name).map(|r| r.value as u32);
+    match (current("BinningHorizontal"), current("BinningVertical")) {
+        (None, _) | (_, None) if binning == 1 => Ok(false),
+        (None, _) | (_, None) => Err(format!("this camera does not support binning (asked for {binning}×{binning})")),
+        (Some(h), Some(v)) => Ok(h != binning || v != binning),
+    }
+}
+
+/// First `<Feature> write error: ...` line of an `arv-tool control` run;
+/// arv-tool reports refused writes this way and still exits with 0.
+pub fn write_error(stdout: &str) -> Option<String> {
+    stdout.lines().map(str::trim).find(|l| l.contains(" write error: ")).map(str::to_string)
+}
+
+/// Writes setting Width / Height to the maxima in `readings`, taken after
+/// the binning changed (the camera's bounds shrink or grow with it).
+pub fn full_region_writes(readings: &[(String, Reading)]) -> Result<Vec<String>, String> {
+    ["Width", "Height"]
+        .iter()
+        .map(|name| {
+            number(readings, name)
+                .map(|r| format!("{name}={}", r.max as i64))
+                .ok_or_else(|| format!("cannot read the camera's {name} bounds"))
+        })
+        .collect()
+}
+
+/// Binning in `readings` once applied, or why it is not `binning`.
+pub fn check_binning(readings: &[(String, Reading)], binning: u32) -> Result<(), String> {
+    match binning_differs(readings, binning)? {
+        false => Ok(()),
+        true => Err(format!("the camera did not accept {binning}×{binning} binning")),
+    }
+}
+
+fn number(readings: &[(String, Reading)], name: &str) -> Option<Range> {
+    readings.iter().find_map(|(n, r)| match r {
+        Reading::Number(range) if n == name => Some(*range),
+        _ => None,
+    })
+}
+
+fn control(arv_tool: &Path, camera: &str, features: &[&str]) -> Result<Vec<(String, Reading)>, String> {
+    let mut args = vec!["-n", camera, "control"];
+    args.extend(features);
+    let stdout = run(arv_tool, &args)?;
+    match write_error(&stdout) {
+        Some(error) => Err(error),
+        None => Ok(parse_control(&stdout)),
+    }
+}
+
+/// Pre-start step: when the camera's binning differs from the config, write
+/// it, reset the offsets and open the region to the full binned sensor, then
+/// verify. Leaves the camera (and any region set elsewhere) alone otherwise.
+pub fn prepare(config: &AravisConfig) -> Result<(), String> {
+    let arv_tool = tools::locate(ARV_TOOL).ok_or_else(missing_tools)?;
+    let camera = config.camera.as_str();
+    let n = config.binning;
+    if !binning_differs(&control(&arv_tool, camera, &["BinningHorizontal", "BinningVertical"])?, n)? {
+        return Ok(());
+    }
+    let (h, v) = (format!("BinningHorizontal={n}"), format!("BinningVertical={n}"));
+    let bounds = control(&arv_tool, camera, &["OffsetX=0", "OffsetY=0", &h, &v, "Width", "Height"])?;
+    let region = full_region_writes(&bounds)?;
+    let mut features: Vec<&str> = region.iter().map(String::as_str).collect();
+    features.extend(["BinningHorizontal", "BinningVertical"]);
+    check_binning(&control(&arv_tool, camera, &features)?, n)
+}
+
 /// Every camera Aravis sees, with its capabilities. Opens each camera briefly,
 /// so a camera that is currently streaming is reported with an error.
 pub fn discover(arv_tool: &Path) -> Result<Vec<AravisDevice>, String> {
@@ -315,6 +389,30 @@ pub fn discover(arv_tool: &Path) -> Result<Vec<AravisDevice>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn binning_preparation_steps() {
+        let readings = |text: &str| parse_control(text);
+        let none = readings("Aravis-Fake-GV01 (127.0.0.1)\nFeature 'BinningHorizontal' not found\n");
+        assert_eq!(binning_differs(&none, 1), Ok(false));
+        assert!(binning_differs(&none, 2).unwrap_err().contains("does not support binning"));
+
+        let one = readings("BinningHorizontal = 1 min:1 max:4\nBinningVertical = 1 min:1 max:4\n");
+        assert_eq!(binning_differs(&one, 1), Ok(false));
+        assert_eq!(binning_differs(&one, 2), Ok(true));
+        assert!(check_binning(&one, 2).unwrap_err().contains("did not accept 2×2"));
+        assert_eq!(check_binning(&one, 1), Ok(()));
+
+        let bounds = readings("OffsetX = 0 min:0 max:0\nWidth = 1920 min:8 max:960\nHeight = 1200 min:2 max:600\n");
+        assert_eq!(full_region_writes(&bounds), Ok(vec!["Width=960".to_string(), "Height=600".to_string()]));
+        assert!(full_region_writes(&none).is_err());
+
+        assert_eq!(
+            write_error("Cam (USB3)\nBinningHorizontal write error: Invalid string for an integer feature (abc)\n"),
+            Some("BinningHorizontal write error: Invalid string for an integer feature (abc)".to_string())
+        );
+        assert_eq!(write_error("Cam (USB3)\nWidth = 960 min:8 max:960\n"), None);
+    }
 
     #[test]
     fn listing_reports_stderr_when_nothing_is_listed() {
@@ -393,7 +491,8 @@ Category    : 'Root'
             ..config()
         };
         let line = c.gst_args().join(" ");
-        assert!(line.contains(" exposure-auto=off exposure=5000 gain-auto=on h-binning=2 v-binning=2 ! "));
+        assert!(line.contains(" exposure-auto=off exposure=5000 gain-auto=on ! "));
+        assert!(!line.contains("binning"));
         assert!(line.contains("video/x-raw,format=GRAY16_LE,framerate=10/1 ! videoconvert"));
     }
 

@@ -144,13 +144,22 @@ YUYV 1280×720 and H264 stream at the requested size.
   (DFTFringe's camera-index path) never sees them on Linux, even though vendor
   viewers and Aravis do.
 - Producer: `gst-launch-1.0 -q -e aravissrc camera-name="<id>" [exposure-auto=off
-  exposure=µs] [gain-auto=off gain=x] [h-binning=n v-binning=n] !
+  exposure=µs] [gain-auto=off gain=x] !
   video/x-raw,format=GRAY8[,framerate=N/D] ! videoconvert ! jpegenc quality=95 !
   fdsink fd=1`. `-q` keeps progress messages off stdout; `-e` turns SIGINT
   into EOS for a clean stop.
 - Exposure and gain go through `aravissrc` properties: Aravis maps them to the
   vendor's feature names (`ExposureTime` vs legacy `ExposureTimeAbs`, `Gain`
   vs `GainRaw`). `arv-tool-0.8 control` provides the ranges shown in the UI.
+- Binning is written before the pipeline, not through `aravissrc`'s
+  `h-binning` / `v-binning`: Aravis 0.8.30 fixates width / height from the
+  unbinned region, then writes the binning and leaves Width / Height alone, so
+  caps and frames disagree (reported as "binning doesn't work" on a Blackfly).
+  `aravis::prepare` (the supervisor's pre-start hook) runs, only when the
+  binning differs: `arv-tool control OffsetX=0 OffsetY=0 BinningHorizontal=n
+  BinningVertical=n Width Height`, then `Width=<max> Height=<max>`, then reads
+  the binning back. arv-tool exits 0 on refused writes and prints `<Feature>
+  write error: ...`, which is turned into the stream error.
 - USB3 Vision gives one process control of the camera: settings apply at
   pipeline start, and discovery fails while streaming (refresh is disabled
   while playing).
@@ -162,4 +171,5 @@ YUYV 1280×720 and H264 stream at the requested size.
 - Simulator: `arv-fake-gv-camera-0.8 -i 127.0.0.1` (package `aravis-tools`).
   It only streams when loopback is the only interface (`docker run --network
   none`); otherwise discovery goes through the bridge address and the stream
-  never arrives. It ignores binning and keeps the last frame rate set.
+  never arrives. It stores binning without shrinking Width / Height bounds
+  and keeps the last frame rate set.
