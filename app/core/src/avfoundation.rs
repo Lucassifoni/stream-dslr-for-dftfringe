@@ -6,7 +6,7 @@
 //! macOS camera: the parsers are written against ffmpeg 7.x log formats.
 
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use crate::camera::{self, Backend, CameraDevice, CameraMode, FrameRate};
 
@@ -125,7 +125,7 @@ pub fn device_from_probe(name: &str, probe_stderr: &str) -> CameraDevice {
 }
 
 fn stderr_of(ffmpeg: &Path, args: &[String]) -> String {
-    Command::new(ffmpeg)
+    crate::tools::host_command(ffmpeg)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())

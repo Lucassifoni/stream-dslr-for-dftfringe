@@ -45,6 +45,18 @@ rather than queue them.
 - No npm / Tauri CLI needed for dev (`cargo run`); icons are generated with
   ffmpeg + `iconutil`. The CLI is only needed to produce a `.app` bundle.
 
+## Starting host tools from the AppImage
+
+The AppImage launcher (`AppRun.wrapped`) prepends the bundle to
+`LD_LIBRARY_PATH`, `GST_PLUGIN_SYSTEM_PATH(_1_0)`, `PYTHONHOME`, `PYTHONPATH`,
+`PERLLIB`, `QT_PLUGIN_PATH` and `PATH`; the GTK hook adds `GIO_MODULE_DIR`,
+`XDG_DATA_DIRS` and friends. Children inherit them, so a host `arv-tool` on a
+newer distro loaded the bundle's Ubuntu 22.04 glib and died with
+`undefined symbol: g_once_init_leave_pointer`, and `gst-launch` lost
+`aravissrc`. Every external tool is therefore started through
+`tools::host_command`, which drops entries under `$APPDIR` (and variables left
+empty). Never spawn with `Command::new` directly.
+
 ## Why a URL and not a camera index
 
 DFTFringe (`videostreamworker.cpp`) opens an integer source with

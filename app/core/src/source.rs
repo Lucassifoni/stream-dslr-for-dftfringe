@@ -70,7 +70,7 @@ pub fn prepare(config: &CaptureConfig) {
 }
 
 fn send_signal(pid: u32, signal: &str) {
-    let _ = Command::new("/bin/kill")
+    let _ = crate::tools::host_command("/bin/kill")
         .args([signal, &pid.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())

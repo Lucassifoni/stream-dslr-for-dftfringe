@@ -189,7 +189,7 @@ impl CameraConfig {
 /// Build the ffmpeg command for `config`, failing with an actionable message if absent.
 pub fn ffmpeg_command(config: &CameraConfig) -> Result<Command, String> {
     let binary = tools::locate("ffmpeg").ok_or_else(|| tools::not_found("ffmpeg"))?;
-    let mut command = Command::new(binary);
+    let mut command = crate::tools::host_command(binary);
     command.args(config.ffmpeg_args());
     Ok(command)
 }

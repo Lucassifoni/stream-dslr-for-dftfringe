@@ -112,7 +112,7 @@ fn level_args(name: &str, level: Level) -> Vec<String> {
 /// Build the gst-launch command for `config`, failing with an actionable message if absent.
 pub fn gst_command(config: &AravisConfig) -> Result<Command, String> {
     let binary = tools::locate(GST_LAUNCH).ok_or_else(missing_tools)?;
-    let mut command = Command::new(binary);
+    let mut command = crate::tools::host_command(binary);
     command.args(config.gst_args());
     Ok(command)
 }
@@ -262,7 +262,7 @@ fn run(tool: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 fn run_full(tool: &Path, args: &[&str]) -> Result<(bool, String, String), String> {
-    let output = Command::new(tool)
+    let output = crate::tools::host_command(tool)
         .args(args)
         .stdin(Stdio::null())
         .output()

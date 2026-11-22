@@ -1,11 +1,16 @@
-//! Locating the external producer binaries (gphoto2, ffmpeg).
+//! Locating and starting the external binaries (gphoto2, ffmpeg, Aravis,
+//! GStreamer).
 //!
 //! macOS GUI apps do not inherit the shell `PATH`, so the usual package
-//! manager prefixes are checked after it.
+//! manager prefixes are checked after it. An AppImage launcher prepends its
+//! bundle to `LD_LIBRARY_PATH`, `GST_PLUGIN_SYSTEM_PATH_1_0`, `PYTHONHOME`
+//! and similar variables; host tools started with those load the bundle's
+//! older libraries and fail, so [`host_command`] strips them.
 
 use std::env;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 /// Directories checked after `PATH` (Homebrew arm64/x86_64, MacPorts, system).
 pub const FALLBACK_DIRS: [&str; 4] = ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin", "/usr/bin"];
@@ -43,6 +48,47 @@ pub fn not_found(name: &str) -> String {
     )
 }
 
+/// Edits restoring the host environment from `vars` when running from the
+/// AppImage mounted at `appdir`: every `:`-separated entry inside `appdir` is
+/// dropped, along with the empty entries left behind. A variable left with no
+/// entry is removed (`None`); untouched variables are not listed.
+pub fn host_env_edits<I>(vars: I, appdir: &str) -> Vec<(String, Option<String>)>
+where
+    I: IntoIterator<Item = (String, String)>,
+{
+    let appdir = appdir.trim_end_matches('/');
+    if appdir.is_empty() {
+        return Vec::new();
+    }
+    vars.into_iter()
+        .filter(|(_, value)| value.split(':').any(|e| inside(e, appdir)))
+        .map(|(key, value)| {
+            let kept: Vec<&str> = value.split(':').filter(|e| !e.is_empty() && !inside(e, appdir)).collect();
+            (key, (!kept.is_empty()).then(|| kept.join(":")))
+        })
+        .collect()
+}
+
+fn inside(entry: &str, appdir: &str) -> bool {
+    entry.strip_prefix(appdir).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
+/// [`Command`] for a host tool, with the AppImage bundle (when `APPDIR` is
+/// set) removed from its environment by [`host_env_edits`].
+pub fn host_command(program: impl AsRef<OsStr>) -> Command {
+    let mut command = Command::new(program);
+    if let Ok(appdir) = env::var("APPDIR") {
+        let vars = env::vars_os().filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)));
+        for (key, value) in host_env_edits(vars, &appdir) {
+            match value {
+                Some(value) => command.env(key, value),
+                None => command.env_remove(key),
+            };
+        }
+    }
+    command
+}
+
 fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     path.metadata()
@@ -54,6 +100,41 @@ fn is_executable(path: &Path) -> bool {
 mod tests {
     use super::*;
     use std::fs;
+
+    fn edits(vars: &[(&str, &str)], appdir: &str) -> Vec<(String, Option<String>)> {
+        host_env_edits(vars.iter().map(|(k, v)| (k.to_string(), v.to_string())), appdir)
+    }
+
+    /// Values as set by the AppImage launcher (`AppRun.wrapped`) of the 0.2.1 AppImage.
+    #[test]
+    fn strips_the_appimage_bundle_from_child_environments() {
+        let a = "/tmp/.mount_LivestAbC";
+        let vars = [
+            ("LD_LIBRARY_PATH", format!("{a}/usr/lib/:{a}/usr/lib/x86_64-linux-gnu/:{a}/lib64/:")),
+            ("GST_PLUGIN_SYSTEM_PATH_1_0", format!("{a}/usr/lib/gstreamer-1.0:/opt/gst")),
+            ("PYTHONHOME", format!("{a}/usr/")),
+            ("GIO_MODULE_DIR", format!("{a}//usr/lib/gio/modules")),
+            ("XDG_DATA_DIRS", format!("{a}/usr/share:/usr/share:/usr/local/share")),
+            ("PATH", format!("{a}/usr/bin/:/usr/local/bin:/usr/bin")),
+            ("DISPLAY", ":0".to_string()),
+            ("HOME", "/home/asp".to_string()),
+            ("OTHER", "/tmp/.mount_LivestAbCdef/x".to_string()),
+        ];
+        let vars: Vec<(&str, &str)> = vars.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let s = |v: &str| Some(v.to_string());
+        assert_eq!(
+            edits(&vars, &format!("{a}/")),
+            vec![
+                ("LD_LIBRARY_PATH".to_string(), None),
+                ("GST_PLUGIN_SYSTEM_PATH_1_0".to_string(), s("/opt/gst")),
+                ("PYTHONHOME".to_string(), None),
+                ("GIO_MODULE_DIR".to_string(), None),
+                ("XDG_DATA_DIRS".to_string(), s("/usr/share:/usr/local/share")),
+                ("PATH".to_string(), s("/usr/local/bin:/usr/bin")),
+            ]
+        );
+        assert_eq!(edits(&vars, "/"), vec![]);
+    }
 
     #[test]
     fn prefers_path_then_fallbacks_and_requires_exec_bit() {

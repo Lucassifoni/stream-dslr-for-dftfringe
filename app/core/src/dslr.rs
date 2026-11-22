@@ -78,7 +78,7 @@ impl DslrConfig {
 /// Build the gphoto2 command for `config`, failing with an actionable message if absent.
 pub fn gphoto2_command(config: &DslrConfig) -> Result<Command, String> {
     let binary = tools::locate("gphoto2").ok_or_else(|| tools::not_found("gphoto2"))?;
-    let mut command = Command::new(binary);
+    let mut command = crate::tools::host_command(binary);
     command.args(config.gphoto2_args());
     Ok(command)
 }
@@ -99,7 +99,7 @@ pub fn camera_claimer_commands(os: &str) -> Vec<Vec<&'static str>> {
 /// Run [`camera_claimer_commands`] for the current OS, ignoring failures.
 pub fn release_camera_claimers() {
     for argv in camera_claimer_commands(env::consts::OS) {
-        let _ = Command::new(argv[0])
+        let _ = crate::tools::host_command(argv[0])
             .args(&argv[1..])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
