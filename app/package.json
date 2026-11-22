@@ -2,7 +2,7 @@
   "name": "livestream-app",
   "private": true,
   "type": "module",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Build tooling only: the Tauri CLI used to produce .dmg/.deb bundles.",
   "scripts": {
     "tauri": "tauri",
