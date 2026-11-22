@@ -258,18 +258,40 @@ pub fn device_from(id: &str, address: &str, readings: &[(String, Reading)], entr
 }
 
 fn run(tool: &Path, args: &[&str]) -> Result<String, String> {
+    run_full(tool, args).map(|(_, stdout, _)| stdout)
+}
+
+fn run_full(tool: &Path, args: &[&str]) -> Result<(bool, String, String), String> {
     let output = Command::new(tool)
         .args(args)
         .stdin(Stdio::null())
         .output()
         .map_err(|e| format!("cannot run {}: {e}", tool.display()))?;
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok((
+        output.status.success(),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    ))
+}
+
+/// Cameras listed by a bare `arv-tool` run. An empty listing that came with a
+/// failure status or stderr output is reported as an error carrying that
+/// output, so a library or permission problem is not mistaken for "no camera".
+pub fn listing(success: bool, stdout: &str, stderr: &str) -> Result<Vec<(String, String)>, String> {
+    let devices = parse_device_list(stdout);
+    let stderr = stderr.trim();
+    match (devices.is_empty(), success, stderr.is_empty()) {
+        (true, false, true) => Err("arv-tool failed without output".to_string()),
+        (true, _, false) => Err(format!("arv-tool: {}", stderr.lines().collect::<Vec<_>>().join(" | "))),
+        _ => Ok(devices),
+    }
 }
 
 /// Every camera Aravis sees, with its capabilities. Opens each camera briefly,
 /// so a camera that is currently streaming is reported with an error.
 pub fn discover(arv_tool: &Path) -> Result<Vec<AravisDevice>, String> {
-    let devices = parse_device_list(&run(arv_tool, &[])?);
+    let (success, stdout, stderr) = run_full(arv_tool, &[])?;
+    let devices = listing(success, &stdout, &stderr)?;
     Ok(devices
         .into_iter()
         .map(|(id, address)| {
@@ -293,6 +315,20 @@ pub fn discover(arv_tool: &Path) -> Result<Vec<AravisDevice>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn listing_reports_stderr_when_nothing_is_listed() {
+        assert_eq!(listing(true, "No device found\n", ""), Ok(vec![]));
+        assert_eq!(
+            listing(true, "", "(arv-tool:1): Aravis-WARNING **: libusb error\nsecond\n"),
+            Err("arv-tool: (arv-tool:1): Aravis-WARNING **: libusb error | second".to_string())
+        );
+        assert_eq!(listing(false, "", ""), Err("arv-tool failed without output".to_string()));
+        assert_eq!(
+            listing(true, "Cam-1 (USB3)\n", "some warning"),
+            Ok(vec![("Cam-1".to_string(), "USB3".to_string())])
+        );
+    }
 
     /// Recorded from `arv-fake-gv-camera-0.8` (Aravis 0.8.30), which uses legacy names.
     const FAKE_CONTROL: &str = "\

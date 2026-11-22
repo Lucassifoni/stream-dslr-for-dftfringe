@@ -144,6 +144,15 @@ export function errorLine(s) {
   return s.serverError || s.missingTool || s.lastError || null;
 }
 
+/**
+ * True when the source shown in the form is not the one the backend runs,
+ * which happens while the shown source has no usable camera. The backend's
+ * producer errors then belong to the other source and Play must stay off.
+ */
+export function sourcePending(shown, s) {
+  return Boolean(s) && s.config.source !== shown;
+}
+
 /** Camera note: device error, or the re-encoding cost of the chosen format. */
 export function cameraNote(device, format) {
   if (!device) return "No camera found. Plug one in and press ↻.";

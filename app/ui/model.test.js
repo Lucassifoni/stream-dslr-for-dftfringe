@@ -15,6 +15,7 @@ import {
   levelModes,
   pickCamera,
   rateLabel,
+  sourcePending,
 } from "./model.js";
 
 const r = (num, den = 1) => ({ num, den });
@@ -129,4 +130,11 @@ test("status description and errors", () => {
   assert.equal(describe({ ...base, fps: 0.5, config: { source: "dslr", mode: "stills" } }), "1280×720 · 2.0 s/frame · 5 frames · 1 client");
   assert.equal(errorLine({ serverError: null, missingTool: "ffmpeg not found", lastError: "exited" }), "ffmpeg not found");
   assert.equal(errorLine({}), null);
+});
+
+test("source pending until the backend runs the shown source", () => {
+  const status = { config: { source: "dslr" } };
+  assert.equal(sourcePending("aravis", status), true);
+  assert.equal(sourcePending("dslr", status), false);
+  assert.equal(sourcePending("aravis", null), false);
 });

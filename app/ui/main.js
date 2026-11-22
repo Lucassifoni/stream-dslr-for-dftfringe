@@ -18,6 +18,7 @@ import {
   pickCamera,
   rateKey,
   rateLabel,
+  sourcePending,
 } from "./model.js";
 
 const { invoke } = window.__TAURI__.core;
@@ -68,7 +69,7 @@ function fail(e) {
 
 function ok() {
   actionError = null;
-  showError(current ? errorLine(current) : null);
+  showError(current && !sourcePending(checked(sourceButtons, "source"), current) ? errorLine(current) : null);
 }
 
 function fillSelect(select, options, value) {
@@ -303,21 +304,35 @@ async function loadAravis() {
   renderAravisForm();
 }
 
-function applyAravis() {
+async function applyAravis() {
   renderAravisForm();
   const dev = selectedAravis();
-  if (dev && !dev.error) sendConfig(aravisConfig(aravisFormValues()));
+  if (dev && !dev.error) await sendConfig(aravisConfig(aravisFormValues()));
 }
 
 async function selectSource(source) {
   showSource(source);
-  if (source === "dslr") return sendConfig(dslrConfig());
-  if (source === "camera") {
+  if (source === "dslr") {
+    await sendConfig(dslrConfig());
+  } else if (source === "camera") {
     if (cameras.length === 0) await loadCameras();
-    return cameraSelection ? sendConfig(cameraConfig(cameraSelection)) : null;
+    if (cameraSelection) await sendConfig(cameraConfig(cameraSelection));
+  } else {
+    if (aravisDevices.length === 0) await loadAravis();
+    await applyAravis();
   }
-  if (aravisDevices.length === 0) await loadAravis();
-  applyAravis();
+  await stopOtherSource(source);
+}
+
+/** Pause a producer left running for another source when the shown one has no usable camera. */
+async function stopOtherSource(source) {
+  try {
+    const s = await invoke("get_status");
+    if (s.playing && sourcePending(source, s)) await invoke("set_playing", { playing: false });
+  } catch (e) {
+    fail(e);
+  }
+  refresh();
 }
 
 function initialise(s) {
@@ -340,14 +355,15 @@ function render(s) {
   if (!initialised) initialise(s);
   $("play").setAttribute("aria-pressed", String(s.playing));
   $("play").querySelector(".label").textContent = s.playing ? "Pause" : "Play";
-  $("play").disabled = Boolean(s.serverError);
+  const pending = sourcePending(checked(sourceButtons, "source"), s);
+  $("play").disabled = Boolean(s.serverError) || (pending && !s.playing);
   $("save").disabled = !s.hasFrame;
   $("arv-refresh").disabled = s.playing && s.config.source === "aravis";
   $("state").textContent = s.state;
   $("state").className = `badge ${s.state}`;
   $("details").textContent = describe(s);
   $("preview-empty").hidden = s.frames > 0 || s.width !== null;
-  showError(errorLine(s) ?? actionError);
+  showError((pending ? null : errorLine(s)) ?? actionError);
 }
 
 async function refresh() {
